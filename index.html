@@ -7,7 +7,7 @@
         @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600&display=swap');
         body { font-family: 'Inter', sans-serif; display: flex; flex-direction: column; align-items: center; margin: 0; background: #1a1a1a; color: #e0e0e0; padding-bottom: 5rem; }
         #main-container { max-width: 1200px; width: 100%; padding: 2rem; box-sizing: border-box; }
-        #header { text-align: center; margin-bottom: 2rem; border-bottom: 1px solid #444; padding-bottom: 1rem; }
+        #header { text-align: center; margin-bottom: 1rem; border-bottom: 1px solid #444; padding-bottom: 1rem; }
         h1 { color: #00aaff; margin-bottom: 0.5rem; }
         #header p { color: #b0b0b0; max-width: 800px; margin: 0 auto; line-height: 1.6; }
         .panel { border: 2px solid #444; background: linear-gradient(to bottom, #282c34, #1e2128); border-radius: 8px; overflow: hidden; }
@@ -18,9 +18,10 @@
         #history-info { right: 10px; text-align: right; }
         .history-entry { color: #ccc; }
         .history-entry span { color: #fff; font-weight: 600; }
+        #import-status { text-align: center; color: #00ff88; height: 1em; margin-bottom: 1rem; font-weight: 600; }
         
         #controls-container { display: flex; flex-direction: column; gap: 1rem; }
-        #main-actions { padding: 1rem; background-color: #2a2a2a; border-radius: 8px; display: flex; justify-content: center; align-items: center; gap: 20px; }
+        #main-actions { padding: 1rem; background-color: #2a2a2a; border-radius: 8px; display: flex; flex-wrap: wrap; justify-content: center; align-items: center; gap: 15px; }
         #settings-panels { display: grid; grid-template-columns: repeat(auto-fit, minmax(350px, 1fr)); gap: 1rem; }
         
         fieldset { border: 1px solid #444; border-radius: 8px; padding: 1rem; background-color: #2a2a2a; }
@@ -34,13 +35,15 @@
 
         label { font-size: 0.9em; margin-bottom: 5px; color: #ccc; }
         input[type="number"] { width: 70px; text-align: center; background: #333; color: #fff; border: 1px solid #555; border-radius: 4px; padding: 5px; }
-        button { font-size: 1em; font-weight: 600; padding: 10px 20px; border: none; border-radius: 5px; background: #00aaff; color: #fff; cursor: pointer; transition: background-color 0.2s, opacity 0.2s; }
-        button:hover { background: #0088cc; }
+        button, .button-label { font-size: 1em; font-weight: 600; padding: 10px 20px; border: none; border-radius: 5px; background: #00aaff; color: #fff; cursor: pointer; transition: background-color 0.2s, opacity 0.2s; display: inline-block; }
+        button:hover, .button-label:hover { background: #0088cc; }
         button:disabled { background: #555; opacity: 0.5; cursor: not-allowed; }
         #pauseButton { background-color: #ffaa00; }
         #pauseButton:hover { background-color: #cc8800; }
         #resetButton { background-color: #dd5555; }
         #resetButton:hover { background-color: #bb3333; }
+        #exportButton { background-color: #55dd55; }
+        #exportButton:hover { background-color: #33bb33; }
     </style>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/matter-js/0.18.0/matter.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
@@ -53,12 +56,15 @@
             <div id="info" class="info-panel"><div>Generation: <span id="generation">0</span></div><div>All-Time Best: <span id="best-distance">0.00</span> m</div><div>Time Left: <span id="time-left">0</span> s</div></div>
             <div id="history-info" class="info-panel"><div class="history-entry">Last Gen Best: <span id="history-1-dist">N/A</span> (Gen <span id="history-1-gen">0</span>)</div><div class="history-entry">Prev Gen Best: <span id="history-2-dist">N/A</span> (Gen <span id="history-2-gen">0</span>)</div></div>
         </div>
-        
+        <div id="import-status"></div>
         <div id="controls-container">
             <div id="main-actions" class="panel">
                 <button id="startButton">Start Evolution</button>
                 <button id="pauseButton" disabled>Pause</button>
                 <button id="resetButton">Reset Settings</button>
+                <button id="exportButton" disabled>Export DNA</button>
+                <label for="import-dna-file" class="button-label">Import DNA</label>
+                <input type="file" id="import-dna-file" accept=".json" style="display: none;">
             </div>
 
             <div id="settings-panels">
@@ -110,7 +116,9 @@ const { Engine, Render, Runner, World, Bodies, Body, Constraint, Vector, Events,
 
 // Main elements
 const canvas = document.getElementById('world');
-const startButton = document.getElementById('startButton'), pauseButton = document.getElementById('pauseButton'), resetButton = document.getElementById('resetButton');
+const startButton = document.getElementById('startButton'), pauseButton = document.getElementById('pauseButton');
+const resetButton = document.getElementById('resetButton'), exportButton = document.getElementById('exportButton');
+const importDnaFile = document.getElementById('import-dna-file'), importStatus = document.getElementById('import-status');
 
 // Info displays
 const info_gen = document.getElementById('generation'), info_dist = document.getElementById('best-distance'), info_time = document.getElementById('time-left');
@@ -138,6 +146,7 @@ let generationTimer, uiTimer, isRunning = false, isStarting = false, isPaused = 
 let cameraTargetX = SPAWN_X, cameraX = SPAWN_X;
 let isPanning = false, lastPanX = 0;
 let evolutionChart, generationHistory = [];
+let importedDnaPool = null;
 
 const defaultSettings = {};
 function storeDefaultSettings() {
@@ -301,6 +310,16 @@ function updateDisplayAndCamera() {
     Render.lookAt(render, {min:{x:cameraX - SIM_WIDTH/2, y:0}, max:{x:cameraX + SIM_WIDTH/2, y:SIM_HEIGHT}});
 }
 
+function getMatingPool() {
+    const eliteCount = Math.floor(population.length * (matingPoolPercent / 100));
+    const matingPool = [];
+    if(population.length > 0 && population[0].fitness > 0) {
+        const elite = population.slice(0, Math.max(1, eliteCount));
+        elite.forEach(w => { for(let i=0; i<100; i++) matingPool.push(w.dna); });
+    }
+    return matingPool;
+}
+
 function nextGeneration() {
     isRunning = false;
     if(uiTimer) cancelAnimationFrame(uiTimer);
@@ -330,14 +349,13 @@ function nextGeneration() {
     generation++; info_gen.textContent = generation; info_dist.textContent = bestDistanceAllTime.toFixed(2);
     updateHistoryUIAndFlags(); updateChart();
     
-    const eliteCount = Math.floor(population.length * (matingPoolPercent / 100));
-    const matingPool = [];
-    if(bestDist > 0) {
-        const elite = population.slice(0, Math.max(1, eliteCount));
-        elite.forEach(w => { for(let i=0; i<100; i++) matingPool.push(w.dna); });
+    const matingPool = (generation === 1 && importedDnaPool) ? importedDnaPool : getMatingPool();
+    if(generation === 1 && importedDnaPool) {
+        importedDnaPool = null; // Use imported DNA only once
+        importStatus.textContent = '';
     }
-    population.forEach(w => w.destroy()); population = [];
 
+    population.forEach(w => w.destroy()); population = [];
     const spawnPromises = [];
     for (let i = 0; i < popSize; i++) {
         const spawnPromise = new Promise(resolve => setTimeout(() => {
@@ -399,7 +417,6 @@ resetButton.addEventListener('click', () => {
         }
     });
 });
-
 pauseButton.addEventListener('click', () => {
     if (!isRunning) return;
     isPaused = !isPaused;
@@ -411,30 +428,20 @@ pauseButton.addEventListener('click', () => {
         window.pauseStartTime = performance.now();
     }
 });
-
 function stopSimulation() {
-    isRunning = false;
-    isPaused = false;
+    isRunning = false; isPaused = false;
     if (uiTimer) cancelAnimationFrame(uiTimer);
     if (runner) Runner.stop(runner);
     if (render) Render.stop(render);
-    if (engine) {
-        World.clear(engine.world);
-        Engine.clear(engine);
-    }
+    if (engine) { World.clear(engine.world); Engine.clear(engine); }
 }
-
 startButton.addEventListener('click', () => {
     if (isStarting) return;
-    
     isStarting = true;
-    startButton.textContent = 'Starting...';
-    startButton.disabled = true;
-    pauseButton.disabled = true;
-    pauseButton.textContent = 'Pause';
-
+    startButton.textContent = 'Starting...'; startButton.disabled = true;
+    pauseButton.disabled = true; pauseButton.textContent = 'Pause';
+    exportButton.disabled = true;
     stopSimulation();
-
     setTimeout(() => {
         readSettings();
         generation = 0; bestDistanceAllTime = 0; population = [];
@@ -442,21 +449,53 @@ startButton.addEventListener('click', () => {
         generationHistory = []; cameraX = SPAWN_X; cameraTargetX = SPAWN_X;
         
         updateHistoryUIAndFlags();
-        if (evolutionChart) {
-            evolutionChart.data.labels = [];
-            evolutionChart.data.datasets[0].data = [];
-            evolutionChart.update();
-        }
-
+        if (evolutionChart) { evolutionChart.data.labels = []; evolutionChart.data.datasets[0].data = []; evolutionChart.update(); }
         setup();
-
         isStarting = false;
-        startButton.textContent = 'Restart Evolution';
-        startButton.disabled = false;
-        pauseButton.disabled = false;
+        startButton.textContent = 'Restart Evolution'; startButton.disabled = false;
+        pauseButton.disabled = false; exportButton.disabled = false;
     }, 100);
 });
-
+exportButton.addEventListener('click', () => {
+    if (!population || population.length === 0) return;
+    const matingPool = getMatingPool();
+    if(matingPool.length === 0) {
+        alert("No successful walkers to export yet. Let a generation complete first.");
+        return;
+    }
+    const dnaJson = JSON.stringify(matingPool, null, 2);
+    const blob = new Blob([dnaJson], {type: 'application/json'});
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `walker_dna_gen_${generation - 1}.json`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+});
+importDnaFile.addEventListener('change', (event) => {
+    const file = event.target.files[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = (e) => {
+        try {
+            const importedData = JSON.parse(e.target.result);
+            // Basic validation
+            if (Array.isArray(importedData) && importedData.length > 0 && importedData[0].genes) {
+                importedDnaPool = importedData;
+                importStatus.textContent = `DNA from "${file.name}" imported successfully! Click Start to use it.`;
+            } else {
+                throw new Error("Invalid DNA file format.");
+            }
+        } catch (error) {
+            alert(`Error reading file: ${error.message}`);
+            importedDnaPool = null;
+        }
+    };
+    reader.readAsText(file);
+    importDnaFile.value = ''; // Reset file input
+});
 
 // Initial Setup
 storeDefaultSettings();

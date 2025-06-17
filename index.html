@@ -92,6 +92,8 @@
                         <div class="toggle-group"><label for="evolveBodyHeight">Evolve Body Height</label><input type="checkbox" id="evolveBodyHeight" checked></div>
                         <div class="toggle-group"><label for="evolveLegLength">Evolve Leg Length</label><input type="checkbox" id="evolveLegLength" checked></div>
                         <div class="toggle-group"><label for="evolveLegWidth">Evolve Leg Width</label><input type="checkbox" id="evolveLegWidth" checked></div>
+                        <div class="toggle-group"><label for="evolveLegAnchorX">Evolve Leg X-Pos</label><input type="checkbox" id="evolveLegAnchorX"></div> <!-- New Checkbox -->
+                        <div class="toggle-group"><label for="evolveLegAnchorY">Evolve Leg Y-Pos</label><input type="checkbox" id="evolveLegAnchorY"></div> <!-- New Checkbox -->
                     </div>
                 </fieldset>
 
@@ -132,12 +134,13 @@ const mutationRateInput = document.getElementById('mutationRate'), matingPoolInp
 const legJointsInput = document.getElementById('legJoints');
 const evolveBodyWidthToggle = document.getElementById('evolveBodyWidth'), evolveBodyHeightToggle = document.getElementById('evolveBodyHeight');
 const evolveLegLengthToggle = document.getElementById('evolveLegLength'), evolveLegWidthToggle = document.getElementById('evolveLegWidth');
+const evolveLegAnchorXToggle = document.getElementById('evolveLegAnchorX'), evolveLegAnchorYToggle = document.getElementById('evolveLegAnchorY'); // New toggles
 
 const SIM_WIDTH = 1200, SIM_HEIGHT = 600, SPAWN_X = 100;
 
 // --- State variables ---
 let popSize, mutationRate, topNDisplay, genTime, legSegments, matingPoolPercent, numLegs, gravity, friction;
-let evolveBodyW, evolveBodyH, evolveLegL, evolveLegW, locomotionGoal;
+let evolveBodyW, evolveBodyH, evolveLegL, evolveLegW, evolveLegAnchorX, evolveLegAnchorY, locomotionGoal; // Updated with new toggles
 let population = [], historyFlag1 = [], historyFlag2 = [];
 let generation = 0, bestDistanceAllTime = 0;
 let previousBest1 = { generation: 0, distance: 0 }, previousBest2 = { generation: 0, distance: 0 };
@@ -147,7 +150,7 @@ let cameraTargetX = SPAWN_X, cameraX = SPAWN_X;
 let isPanning = false, lastPanX = 0;
 let evolutionChart, generationHistory = [];
 let importedDnaPool = null;
-let lastGenerationMatingPool = []; // Added: Stores DNA from the last completed successful generation for export
+let lastGenerationMatingPool = []; // Stores DNA from the last completed successful generation for export
 
 const defaultSettings = {};
 function storeDefaultSettings() {
@@ -175,13 +178,15 @@ class Walker {
 
         dna.genes.legs.forEach((legDna, legIndex) => {
             let parentBody = this.torso;
-            let parentAttachPoint = { ...dna.genes.legAnchors[legIndex] };
+            // Use the evolved leg anchor point from DNA, with a fallback
+            const parentAttachPoint = dna.genes.legAnchors[legIndex] ? { ...dna.genes.legAnchors[legIndex] } : { x:0, y: dna.genes.torsoSize.h / 2 }; 
             
             legDna.forEach((segmentDna) => {
                 const legWidth = segmentDna.width;
                 const legLength = segmentDna.len;
-                const spawnX = x + parentAttachPoint.x;
-                const spawnY = y + parentAttachPoint.y + legLength / 2;
+                // Position calculations now use the parentAttachPoint
+                const spawnX = x + parentAttachPoint.x; 
+                const spawnY = y + parentAttachPoint.y + legLength / 2; 
 
                 const segmentBody = Bodies.rectangle(spawnX, spawnY, legWidth, legLength, {...opt, render: { ...bodyRenderStyle, fillStyle: '#888' }});
                 const joint = Constraint.create({
@@ -200,7 +205,8 @@ class Walker {
     }
     update(simTime) {
         const allSegmentsDna = this.dna.genes.legs.flat();
-        const legSegmentBodies = this.composite.bodies.slice(1);
+        // Skip torso (index 0)
+        const legSegmentBodies = this.composite.bodies.slice(1); 
         legSegmentBodies.forEach((segmentBody, index) => {
             const segmentDna = allSegmentsDna[index];
             if (segmentDna) {
@@ -224,17 +230,35 @@ class DNA {
             const randH = evolveBodyH ? Math.random() * 30 : 0;
             this.genes.torsoSize = { w: baseW + randW, h: baseH + randH };
             
-            if (numLegs > 0) { // Ensure anchors are created only if legs exist
-                if (locomotionGoal === 'quadrupedal') {
-                    this.genes.legAnchors = numLegs === 1 ? [{x: 0, y: 0}] : [{ x: -this.genes.torsoSize.w / 2 + 15, y: 0 }, { x: this.genes.torsoSize.w / 2 - 15, y: 0 }];
-                } else { // Bipedal or None
-                    const yAnchor = this.genes.torsoSize.h / 2;
-                    this.genes.legAnchors = numLegs === 1 ? [{x: 0, y: yAnchor}] : [{ x: -this.genes.torsoSize.w / 2 + 5, y: yAnchor }, { x: this.genes.torsoSize.w / 2 - 5, y: yAnchor }];
-                }
-            } else { // No legs, no anchors needed
-                this.genes.legAnchors = [];
-            }
+            this.genes.legAnchors = [];
+            for (let i = 0; i < numLegs; i++) {
+                let baseAnchorX, baseAnchorY;
+                const torsoHalfW = this.genes.torsoSize.w / 2;
+                const torsoHalfH = this.genes.torsoSize.h / 2;
 
+                if (locomotionGoal === 'quadrupedal') {
+                    // Quadrupedal: typically attach closer to the ends horizontally, and low vertically
+                    baseAnchorY = torsoHalfH - 5; // Slightly up from the very bottom
+                    if (numLegs === 1) {
+                        baseAnchorX = 0;
+                    } else { // 2 legs
+                        baseAnchorX = (i === 0) ? -torsoHalfW + 15 : torsoHalfW - 15;
+                    }
+                } else { // Bipedal or None: typically attach at the bottom for bipedal movement
+                    baseAnchorY = torsoHalfH; // Exactly at the bottom
+                    if (numLegs === 1) {
+                        baseAnchorX = 0;
+                    } else { // 2 legs
+                        baseAnchorX = (i === 0) ? -torsoHalfW / 2 : torsoHalfW / 2;
+                    }
+                }
+
+                // Add random offset if evolution is enabled for anchors
+                const anchorX = evolveLegAnchorX ? baseAnchorX + (Math.random() - 0.5) * 40 : baseAnchorX; // Increased initial range
+                const anchorY = evolveLegAnchorY ? baseAnchorY + (Math.random() - 0.5) * 30 : baseAnchorY; // Increased initial range
+
+                this.genes.legAnchors.push({ x: anchorX, y: anchorY });
+            }
 
             for (let i = 0; i < numLegs; i++) {
                 const leg = [];
@@ -251,7 +275,8 @@ class DNA {
         const nG = JSON.parse(JSON.stringify(this.genes));
         if (Math.random() < 0.5) nG.color = p.genes.color;
         if (Math.random() < 0.5) nG.torsoSize = p.genes.torsoSize;
-        if (Math.random() < 0.5) nG.legAnchors = p.genes.legAnchors; // Consider more complex merging if leg count can change
+        // Crossover leg anchors - simple full array swap for now
+        if (Math.random() < 0.5) nG.legAnchors = p.genes.legAnchors; 
 
         for (let legIndex = 0; legIndex < numLegs; legIndex++) {
             for (let segIndex = 0; segIndex < legSegments; segIndex++) {
@@ -270,9 +295,14 @@ class DNA {
         const m = (v, d) => v + (Math.random() - 0.5) * d;
         if (evolveBodyW && Math.random() < r) this.genes.torsoSize.w = Math.max(10, m(this.genes.torsoSize.w, 10));
         if (evolveBodyH && Math.random() < r) this.genes.torsoSize.h = Math.max(10, m(this.genes.torsoSize.h, 10));
+        
         this.genes.legAnchors.forEach(anchor => {
-            if (Math.random() < r) anchor.x = m(anchor.x, 5); if (Math.random() < r) anchor.y = m(anchor.y, 5);
+            // Mutate X anchor if enabled
+            if (evolveLegAnchorX && Math.random() < r) anchor.x = m(anchor.x, 15); // Increased mutation range
+            // Mutate Y anchor if enabled
+            if (evolveLegAnchorY && Math.random() < r) anchor.y = m(anchor.y, 10); // Increased mutation range
         });
+
         this.genes.legs.forEach(leg => {
             leg.forEach(segment => {
                 if (evolveLegL && Math.random() < r) segment.len = Math.max(10, m(segment.len, 10));
@@ -421,6 +451,8 @@ function readSettings() {
     gravity = parseFloat(gravityInput.value); friction = parseFloat(frictionInput.value);
     evolveBodyW = evolveBodyWidthToggle.checked; evolveBodyH = evolveBodyHeightToggle.checked;
     evolveLegL = evolveLegLengthToggle.checked; evolveLegW = evolveLegWidthToggle.checked;
+    evolveLegAnchorX = evolveLegAnchorXToggle.checked; // Read new setting
+    evolveLegAnchorY = evolveLegAnchorYToggle.checked; // Read new setting
     locomotionGoal = document.querySelector('input[name="locomotion"]:checked').value;
 }
 
@@ -505,7 +537,7 @@ importDnaFile.addEventListener('change', (event) => {
                 importedDnaPool = importedData;
                 importStatus.textContent = `DNA from "${file.name}" imported successfully! Click Start to use it.`;
             } else {
-                throw new Error("Invalid DNA file format. Expected an array of DNA objects.");
+                throw new Error("Invalid DNA file format. Expected an array of DNA objects with 'genes'.");
             }
         } catch (error) {
             alert(`Error reading file: ${error.message}`);

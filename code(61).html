@@ -1,0 +1,228 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>AI Walker Evolution Simulator</title>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600&display=swap');
+        body { font-family: 'Inter', sans-serif; display: flex; flex-direction: column; align-items: center; margin: 0; background: #1a1a1a; color: #e0e0e0; }
+        #main-container { max-width: 1200px; width: 100%; padding: 2rem; box-sizing: border-box; }
+        #header { text-align: center; margin-bottom: 2rem; border-bottom: 1px solid #444; padding-bottom: 1rem; }
+        h1 { color: #00aaff; margin-bottom: 0.5rem; }
+        #header p { color: #b0b0b0; max-width: 800px; margin: 0 auto; line-height: 1.6; }
+        .panel { border: 2px solid #444; background: linear-gradient(to bottom, #282c34, #1e2128); border-radius: 8px; overflow: hidden; }
+        #simulation-area { position: relative; cursor: grab; }
+        #simulation-area:active { cursor: grabbing; }
+        .info-panel { position: absolute; top: 10px; background: rgba(0,0,0,0.6); padding: 10px 15px; border-radius: 6px; font-size: 14px; z-index: 10; }
+        #info { left: 10px; }
+        #history-info { right: 10px; text-align: right; }
+        .history-entry { color: #ccc; }
+        .history-entry span { color: #fff; font-weight: 600; }
+        #controls { padding: 1.5rem; background-color: #2a2a2a; width: 100%; box-sizing: border-box; text-align: center; display: flex; flex-wrap: wrap; justify-content: center; align-items: center; gap: 20px; border-radius: 0 0 8px 8px; margin-top: -2px; }
+        .control-group { display: flex; flex-direction: column; align-items: center; cursor: help; }
+        label { font-size: 0.9em; margin-bottom: 5px; color: #ccc; }
+        input[type="number"] { width: 70px; text-align: center; background: #333; color: #fff; border: 1px solid #555; border-radius: 4px; padding: 5px; }
+        .toggle-group { display: flex; align-items: center; gap: 8px; }
+        button { font-size: 1em; font-weight: 600; padding: 10px 20px; border: none; border-radius: 5px; background: #00aaff; color: #fff; cursor: pointer; transition: background-color 0.2s, opacity 0.2s; }
+        button:hover { background: #0088cc; }
+        button:disabled { background: #555; opacity: 0.5; cursor: not-allowed; }
+    </style>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/matter-js/0.18.0/matter.min.js"></script>
+</head>
+<body>
+    <div id="main-container">
+        <div id="header"><h1>AI Walker Evolution Simulator</h1><p>A population of simple "walkers" is created with random DNA. Their goal: travel as far as possible in a fixed time. The most successful walkers from each generation "breed" to create the next, passing on traits with slight mutations. Over time, they evolve effective ways to walk.</p></div>
+        <div id="simulation-area" class="panel">
+            <canvas id="world"></canvas>
+            <div id="info" class="info-panel"><div>Generation: <span id="generation">0</span></div><div>All-Time Best: <span id="best-distance">0.00</span> m</div><div>Time Left: <span id="time-left">0</span> s</div></div>
+            <div id="history-info" class="info-panel"><div class="history-entry">Last Gen Best: <span id="history-1-dist">N/A</span> (Gen <span id="history-1-gen">0</span>)</div><div class="history-entry">Prev Gen Best: <span id="history-2-dist">N/A</span> (Gen <span id="history-2-gen">0</span>)</div></div>
+        </div>
+        <div id="controls">
+            <div class="control-group" title="The number of walkers created in each generation."><label for="popSize">Population</label><input type="number" id="popSize" value="100" min="10"></div>
+            <div class="control-group" title="The chance for a walker's DNA to randomly change."><label for="mutationRate">Mutation Rate (%)</label><input type="number" id="mutationRate" value="2" min="0"></div>
+            <div class="control-group" title="The time each generation has to prove its fitness."><label for="genTime">Time per Gen (s)</label><input type="number" id="genTime" value="15" min="5"></div>
+            <div class="control-group" title="How many of the current top performers to display."><label for="topNDisplay">Show Top</label><input type="number" id="topNDisplay" value="10" min="1"></div>
+            <div class="toggle-group" title="Toggle whether the camera automatically follows the current leader."><label for="cameraToggle">Auto-Camera</label><input type="checkbox" id="cameraToggle" checked></div>
+            <div class="toggle-group" title="Include leg thickness in the DNA for evolution."><label for="evolveWidthToggle">Evolve Leg Width</label><input type="checkbox" id="evolveWidthToggle" checked></div>
+            <button id="startButton">Start Evolution</button>
+        </div>
+    </div>
+
+<script>
+const { Engine, Render, Runner, World, Bodies, Body, Constraint, Vector, Events, Composite } = Matter;
+
+const canvas = document.getElementById('world');
+const info_gen = document.getElementById('generation'), info_dist = document.getElementById('best-distance'), info_time = document.getElementById('time-left');
+const history1DistEl = document.getElementById('history-1-dist'), history1GenEl = document.getElementById('history-1-gen');
+const history2DistEl = document.getElementById('history-2-dist'), history2GenEl = document.getElementById('history-2-gen');
+const popSizeInput = document.getElementById('popSize'), mutationRateInput = document.getElementById('mutationRate');
+const topNDisplayInput = document.getElementById('topNDisplay'), genTimeInput = document.getElementById('genTime');
+const cameraToggleInput = document.getElementById('cameraToggle'), startButton = document.getElementById('startButton');
+const evolveWidthToggle = document.getElementById('evolveWidthToggle');
+const SIM_WIDTH = 1200, SIM_HEIGHT = 600, SPAWN_X = 100;
+
+let popSize, mutationRate, topNDisplay, genTime, evolveLegWidth;
+let population = [], historyFlag1 = [], historyFlag2 = [];
+let generation = 0, bestDistanceAllTime = 0;
+let previousBest1 = { generation: 0, distance: 0 }, previousBest2 = { generation: 0, distance: 0 };
+let runner, engine, render;
+let generationTimer, uiTimer, isRunning = false, isStarting = false;
+let cameraTargetX = SPAWN_X, cameraX = SPAWN_X;
+let isPanning = false, lastPanX = 0;
+
+class Walker {
+    constructor(dna, x, y) {
+        this.dna = dna;
+        const group = -1;
+        const bodyRenderStyle = { strokeStyle: '#333', lineWidth: 2 };
+        const opt = { friction: 0.8, collisionFilter: { group }, render: bodyRenderStyle };
+        this.composite = Composite.create({ label: 'Walker' });
+        const torso = Bodies.rectangle(x, y, dna.genes.torsoSize.w, dna.genes.torsoSize.h, {...opt, render: { ...bodyRenderStyle, fillStyle: dna.genes.color }});
+        this.torso = torso;
+        this.startPosition = Vector.clone(torso.position);
+        Composite.addBody(this.composite, torso);
+        dna.genes.legs.forEach(leg => {
+            const legWidth = evolveLegWidth ? leg.width : 15;
+            const l = Bodies.rectangle(x + leg.anchor.x, y + leg.anchor.y, legWidth, leg.len, {...opt, render: { ...bodyRenderStyle, fillStyle: '#888' }});
+            const j = Constraint.create({ bodyA: torso, bodyB: l, pointA: {x:leg.anchor.x,y:leg.anchor.y}, pointB: {x:0,y:-leg.len/2}, stiffness: 0.9, length: 0, render: { visible: false } });
+            Composite.addBody(this.composite, l);
+            Composite.addConstraint(this.composite, j);
+        });
+        World.add(engine.world, this.composite);
+    }
+    update(simTime) {
+        this.dna.genes.legs.forEach((leg, i) => { 
+            const legBody = this.composite.bodies[i + 1];
+            Body.setAngularVelocity(legBody, Math.sin(simTime * leg.motorSpeed + leg.motorOffset) * leg.motorStrength); 
+        });
+    }
+    render(style) {
+        const v = style !== 'hidden';
+        Composite.allBodies(this.composite).forEach(p => p.render.visible = v);
+    }
+    destroy() {
+        World.remove(engine.world, this.composite);
+    }
+}
+class DNA {
+    constructor(genes) {
+        if (genes) { this.genes = genes; } 
+        else {
+            this.genes = {
+                torsoSize: { w: 50 + Math.random() * 50, h: 20 + Math.random() * 20 },
+                legs: [
+                    { len: 40 + Math.random() * 40, width: 10 + Math.random() * 10, anchor:{x:-25, y:0}, motorSpeed: Math.random() * 5, motorOffset: Math.random() * Math.PI, motorStrength: Math.random() * 0.5 },
+                    { len: 40 + Math.random() * 40, width: 10 + Math.random() * 10, anchor:{x:25, y:0}, motorSpeed: Math.random() * 5, motorOffset: Math.random() * Math.PI, motorStrength: Math.random() * 0.5 }
+                ],
+                color: `hsl(${Math.random() * 360}, 70%, 70%)`
+            };
+        }
+    }
+    crossover(p) {
+        const nG = JSON.parse(JSON.stringify(this.genes));
+        if (Math.random() < 0.5) nG.color = p.genes.color;
+        if (Math.random()<0.5) nG.torsoSize=p.genes.torsoSize;
+        nG.legs.forEach((l,i)=>{
+            if(Math.random()<0.5)l.len=p.genes.legs[i].len;
+            if(Math.random()<0.5)l.width=p.genes.legs[i].width;
+            if(Math.random()<0.5)l.motorSpeed=p.genes.legs[i].motorSpeed;
+            if(Math.random()<0.5)l.motorOffset=p.genes.legs[i].motorOffset;
+            if(Math.random()<0.5)l.motorStrength=p.genes.legs[i].motorStrength;
+        });
+        return new DNA(nG);
+    }
+    mutate(r) {
+        const m=(v,d)=>v+(Math.random()-0.5)*d;
+        if(Math.random()<r) this.genes.torsoSize.w=m(this.genes.torsoSize.w,10);
+        this.genes.legs.forEach(l=>{
+            if(Math.random()<r)l.len=m(l.len,10);
+            if(Math.random()<r && evolveLegWidth)l.width=m(l.width,5);
+            if(Math.random()<r)l.motorSpeed=m(l.motorSpeed,1);
+            if(Math.random()<r)l.motorStrength=m(l.motorStrength,0.1);
+        });
+        if(Math.random()<r) this.genes.color = `hsl(${Math.random()*360}, 70%, 70%)`;
+    }
+}
+
+function setup() {
+    engine = Engine.create({ positionIterations: 4, velocityIterations: 2 }); 
+    render = Render.create({canvas:canvas,engine:engine,options:{width:SIM_WIDTH,height:SIM_HEIGHT,wireframes:false,background:'transparent'}});
+    const ground = Bodies.rectangle(SIM_WIDTH*2, SIM_HEIGHT-25, SIM_WIDTH*10, 50, {isStatic:true, render:{fillStyle:'#333'}});
+    World.add(engine.world, [ground, ...createFlag(SPAWN_X, '#00dd00')]);
+    Events.on(engine, 'beforeUpdate', () => { if (isRunning) population.forEach(walker => walker.update(engine.timing.timestamp / 1000)); });
+    runner = Runner.create(); Runner.run(runner, engine); Render.run(render);
+    nextGeneration();
+}
+
+function uiLoop() {
+    if (!isStarting && !isRunning) return;
+    updateDisplayAndCamera();
+    const timeLeft = genTime - (performance.now() - generationTimer) / 1000;
+    info_time.textContent = Math.max(0, timeLeft).toFixed(1);
+    if (timeLeft <= 0) {
+        nextGeneration();
+    } else {
+        uiTimer = requestAnimationFrame(uiLoop);
+    }
+}
+
+function updateDisplayAndCamera() {
+    population.sort((a,b) => b.torso.position.x - a.torso.position.x);
+    const topPerformers = new Set(population.slice(0, topNDisplay));
+    population.forEach(w => w.render(topPerformers.has(w)?'normal':'hidden'));
+    if (cameraToggleInput.checked && population.length > 0) cameraTargetX = population[0].torso.position.x;
+    cameraX += (cameraTargetX - cameraX) * 0.05;
+    Render.lookAt(render, {min:{x:cameraX - SIM_WIDTH/2, y:0}, max:{x:cameraX + SIM_WIDTH/2, y:SIM_HEIGHT}});
+}
+
+function nextGeneration() {
+    isRunning = false;
+    if(uiTimer) cancelAnimationFrame(uiTimer);
+
+    population.forEach(w => { w.fitness = Math.max(0, w.torso.position.x - w.startPosition.x); });
+    population.sort((a, b) => b.fitness - a.fitness);
+    const bestDist = population.length > 0 ? population[0].fitness : 0;
+    if (bestDist > bestDistanceAllTime) bestDistanceAllTime = bestDist;
+    if (generation > 0) { previousBest2 = {...previousBest1}; previousBest1 = {generation: generation, distance: bestDist}; }
+    generation++; info_gen.textContent = generation; info_dist.textContent = bestDistanceAllTime.toFixed(2);
+    updateHistoryUIAndFlags();
+    
+    let matingPool = [];
+    if(bestDist > 0) population.forEach(w => { for(let i=0; i<Math.floor((w.fitness/bestDist)*100); i++) matingPool.push(w.dna); });
+    population.forEach(w => w.destroy()); population = [];
+
+    const spawnPromises = [];
+    for (let i = 0; i < popSize; i++) {
+        const spawnPromise = new Promise(resolve => setTimeout(() => {
+            if (isStarting) return resolve();
+            const pA = matingPool.length > 0 ? matingPool[Math.floor(Math.random()*matingPool.length)] : new DNA();
+            const pB = matingPool.length > 0 ? matingPool[Math.floor(Math.random()*matingPool.length)] : new DNA();
+            const childDNA = pA.crossover(pB); childDNA.mutate(mutationRate);
+            population.push(new Walker(childDNA, SPAWN_X, SIM_HEIGHT - 150));
+            resolve();
+        }, i * (100 / Math.max(popSize, 1)) ));
+        spawnPromises.push(spawnPromise);
+    }
+    
+    Promise.all(spawnPromises).then(() => { if (!isStarting) { isRunning = true; generationTimer = performance.now(); uiTimer = requestAnimationFrame(uiLoop); }});
+}
+
+function createFlag(x, color) { const y = SIM_HEIGHT-50, opt={isStatic:true,isSensor:true,render:{fillStyle:color}}; return [Bodies.rectangle(x, y-20, 3, 40, opt), Bodies.rectangle(x+10, y-40, 20, 10, opt)]; }
+function updateHistoryUIAndFlags() {
+    if(historyFlag1.length>0)World.remove(engine.world,historyFlag1); if(historyFlag2.length>0)World.remove(engine.world,historyFlag2);
+    historyFlag1=[],historyFlag2=[];
+    if(previousBest1.generation>0){ history1DistEl.textContent=`${previousBest1.distance.toFixed(2)}m`;history1GenEl.textContent=previousBest1.generation; if(previousBest1.distance>0){historyFlag1=createFlag(SPAWN_X+previousBest1.distance,'#ffd700');World.add(engine.world,historyFlag1);}}else{history1DistEl.textContent="N/A";history1GenEl.textContent="0";}
+    if(previousBest2.generation>0){ history2DistEl.textContent=`${previousBest2.distance.toFixed(2)}m`;history2GenEl.textContent=previousBest2.generation; if(previousBest2.distance>0){historyFlag2=createFlag(SPAWN_X+previousBest2.distance,'#00aaff');World.add(engine.world,historyFlag2);}}else{history2DistEl.textContent="N/A";history2GenEl.textContent="0";}
+}
+function readSettings() { popSize=parseInt(popSizeInput.value);mutationRate=parseFloat(mutationRateInput.value)/100;topNDisplay=parseInt(topNDisplayInput.value);genTime=parseInt(genTimeInput.value);evolveLegWidth=evolveWidthToggle.checked; }
+startButton.addEventListener('click',()=>{if(isStarting)return;isStarting=true;startButton.disabled=true;isRunning=false;if(uiTimer)cancelAnimationFrame(uiTimer);if(runner){Runner.stop(runner);Render.stop(render);if(engine){World.clear(engine.world);Engine.clear(engine);}}readSettings();generation=0;bestDistanceAllTime=0;population=[];previousBest1={generation:0,distance:0};previousBest2={generation:0,distance:0};cameraX=SPAWN_X;cameraTargetX=SPAWN_X;updateHistoryUIAndFlags();setTimeout(()=>{setup();isStarting=false;startButton.disabled=false;},100);});
+topNDisplayInput.addEventListener('input', e=>{const v=parseInt(e.target.value,10);if(!isNaN(v)&&v>0)topNDisplay=v;});
+canvas.addEventListener('mousedown',e=>{if(!cameraToggleInput.checked){isPanning=true;lastPanX=e.pageX;canvas.style.cursor='grabbing';}});
+window.addEventListener('mouseup',()=>{isPanning=false;canvas.style.cursor='grab';});
+window.addEventListener('mousemove',e=>{if(isPanning){const dx=e.pageX-lastPanX;cameraTargetX-=dx;lastPanX=e.pageX;}});
+
+readSettings();
+info_gen.textContent="0";info_dist.textContent="0.00";info_time.textContent=genTimeInput.value;
+</script>
+</body>
+</html>

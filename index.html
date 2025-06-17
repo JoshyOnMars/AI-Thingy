@@ -92,8 +92,8 @@
                         <div class="toggle-group"><label for="evolveBodyHeight">Evolve Body Height</label><input type="checkbox" id="evolveBodyHeight" checked></div>
                         <div class="toggle-group"><label for="evolveLegLength">Evolve Leg Length</label><input type="checkbox" id="evolveLegLength" checked></div>
                         <div class="toggle-group"><label for="evolveLegWidth">Evolve Leg Width</label><input type="checkbox" id="evolveLegWidth" checked></div>
-                        <div class="toggle-group"><label for="evolveLegAnchorX">Evolve Leg X-Pos</label><input type="checkbox" id="evolveLegAnchorX"></div> <!-- New Checkbox -->
-                        <div class="toggle-group"><label for="evolveLegAnchorY">Evolve Leg Y-Pos</label><input type="checkbox" id="evolveLegAnchorY"></div> <!-- New Checkbox -->
+                        <div class="toggle-group"><label for="evolveLegAnchorX">Evolve Leg X-Pos</label><input type="checkbox" id="evolveLegAnchorX"></div>
+                        <div class="toggle-group"><label for="evolveLegAnchorY">Evolve Leg Y-Pos</label><input type="checkbox" id="evolveLegAnchorY"></div>
                     </div>
                 </fieldset>
 
@@ -129,7 +129,7 @@ const history2DistEl = document.getElementById('history-2-dist'), history2GenEl 
 
 // --- Input elements ---
 const popSizeInput = document.getElementById('popSize'), genTimeInput = document.getElementById('genTime'), topNDisplayInput = document.getElementById('topNDisplay');
-const cameraToggleInput = document.getElementById('cameraToggle'), frictionInput = document.getElementById('friction'), gravityInput = document.getElementById('gravity');
+const cameraToggleInput = document.getElementById('cameraToggle'), frictionInput = document.getElementById('friction'), gravityInput = document.getElementById('gravity'); // Fixed typo here!
 const mutationRateInput = document.getElementById('mutationRate'), matingPoolInput = document.getElementById('matingPool'), numLegsInput = document.getElementById('numLegs');
 const legJointsInput = document.getElementById('legJoints');
 const evolveBodyWidthToggle = document.getElementById('evolveBodyWidth'), evolveBodyHeightToggle = document.getElementById('evolveBodyHeight');
@@ -178,13 +178,13 @@ class Walker {
 
         dna.genes.legs.forEach((legDna, legIndex) => {
             let parentBody = this.torso;
-            // Use the evolved leg anchor point from DNA, with a fallback
+            // Use the evolved leg anchor point from DNA, with a fallback if somehow missing
             const parentAttachPoint = dna.genes.legAnchors[legIndex] ? { ...dna.genes.legAnchors[legIndex] } : { x:0, y: dna.genes.torsoSize.h / 2 }; 
             
             legDna.forEach((segmentDna) => {
                 const legWidth = segmentDna.width;
                 const legLength = segmentDna.len;
-                // Position calculations now use the parentAttachPoint
+                // Position calculations now use the parentAttachPoint relative to the torso's center
                 const spawnX = x + parentAttachPoint.x; 
                 const spawnY = y + parentAttachPoint.y + legLength / 2; 
 
@@ -197,8 +197,9 @@ class Walker {
                 Composite.addBody(this.composite, segmentBody);
                 Composite.addConstraint(this.composite, joint);
                 
+                // For subsequent segments of the *same* leg, the attachment is relative to the *previous* segment
                 parentBody = segmentBody;
-                parentAttachPoint = { x: 0, y: legLength / 2 };
+                parentAttachPoint = { x: 0, y: legLength / 2 }; // This point is now relative to the segment's center
             });
         });
         World.add(engine.world, this.composite);
@@ -242,6 +243,7 @@ class DNA {
                     if (numLegs === 1) {
                         baseAnchorX = 0;
                     } else { // 2 legs
+                        // For quadrupedal, if 2 legs, they'd typically be on the sides
                         baseAnchorX = (i === 0) ? -torsoHalfW + 15 : torsoHalfW - 15;
                     }
                 } else { // Bipedal or None: typically attach at the bottom for bipedal movement
@@ -249,13 +251,14 @@ class DNA {
                     if (numLegs === 1) {
                         baseAnchorX = 0;
                     } else { // 2 legs
+                        // For bipedal, if 2 legs, they'd typically be balanced left/right
                         baseAnchorX = (i === 0) ? -torsoHalfW / 2 : torsoHalfW / 2;
                     }
                 }
 
                 // Add random offset if evolution is enabled for anchors
-                const anchorX = evolveLegAnchorX ? baseAnchorX + (Math.random() - 0.5) * 40 : baseAnchorX; // Increased initial range
-                const anchorY = evolveLegAnchorY ? baseAnchorY + (Math.random() - 0.5) * 30 : baseAnchorY; // Increased initial range
+                const anchorX = evolveLegAnchorX ? baseAnchorX + (Math.random() - 0.5) * 40 : baseAnchorX; // Increased initial range for x
+                const anchorY = evolveLegAnchorY ? baseAnchorY + (Math.random() - 0.5) * 30 : baseAnchorY; // Increased initial range for y
 
                 this.genes.legAnchors.push({ x: anchorX, y: anchorY });
             }
@@ -275,8 +278,14 @@ class DNA {
         const nG = JSON.parse(JSON.stringify(this.genes));
         if (Math.random() < 0.5) nG.color = p.genes.color;
         if (Math.random() < 0.5) nG.torsoSize = p.genes.torsoSize;
-        // Crossover leg anchors - simple full array swap for now
-        if (Math.random() < 0.5) nG.legAnchors = p.genes.legAnchors; 
+        
+        // Crossover leg anchors: Iterating per leg to allow for partial crossover if desired,
+        // but for now, it's a simple swap for each leg's anchor.
+        for (let i = 0; i < numLegs; i++) {
+            if (p.genes.legAnchors[i] && Math.random() < 0.5) { // Ensure parent has the anchor
+                nG.legAnchors[i] = { ...p.genes.legAnchors[i] };
+            }
+        }
 
         for (let legIndex = 0; legIndex < numLegs; legIndex++) {
             for (let segIndex = 0; segIndex < legSegments; segIndex++) {

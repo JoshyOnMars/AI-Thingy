@@ -128,29 +128,38 @@ const history1DistEl = document.getElementById('history-1-dist'), history1GenEl 
 const history2DistEl = document.getElementById('history-2-dist'), history2GenEl = document.getElementById('history-2-gen');
 
 // --- Input elements ---
-const popSizeInput = document.getElementById('popSize'), genTimeInput = document.getElementById('genTime'), topNDisplayInput = document.getElementById('topNDisplay');
-const cameraToggleInput = document.getElementById('cameraToggle'), frictionInput = document.getElementById('friction'), gravityInput = document.getElementById('gravity'); // FIXED: Typo was here!
-const mutationRateInput = document.getElementById('mutationRate'), matingPoolInput = document.getElementById('matingPool'), numLegsInput = document.getElementById('numLegs');
+const popSizeInput = document.getElementById('popSize');
+const genTimeInput = document.getElementById('genTime');
+const topNDisplayInput = document.getElementById('topNDisplay');
+const cameraToggleInput = document.getElementById('cameraToggle');
+const frictionInput = document.getElementById('friction');
+const gravityInput = document.getElementById('gravity'); // Correctly linked now
+const mutationRateInput = document.getElementById('mutationRate');
+const matingPoolInput = document.getElementById('matingPool');
+const numLegsInput = document.getElementById('numLegs');
 const legJointsInput = document.getElementById('legJoints');
-const evolveBodyWidthToggle = document.getElementById('evolveBodyWidth'), evolveBodyHeightToggle = document.getElementById('evolveBodyHeight');
-const evolveLegLengthToggle = document.getElementById('evolveLegLength'), evolveLegWidthToggle = document.getElementById('evolveLegWidth');
-const evolveLegAnchorXToggle = document.getElementById('evolveLegAnchorX'), evolveLegAnchorYToggle = document.getElementById('evolveLegAnchorY'); // New toggles
+const evolveBodyWidthToggle = document.getElementById('evolveBodyWidth');
+const evolveBodyHeightToggle = document.getElementById('evolveBodyHeight');
+const evolveLegLengthToggle = document.getElementById('evolveLegLength');
+const evolveLegWidthToggle = document.getElementById('evolveLegWidth');
+const evolveLegAnchorXToggle = document.getElementById('evolveLegAnchorX');
+const evolveLegAnchorYToggle = document.getElementById('evolveLegAnchorY');
 
 const SIM_WIDTH = 1200, SIM_HEIGHT = 600, SPAWN_X = 100;
 
 // --- State variables ---
 let popSize, mutationRate, topNDisplay, genTime, legSegments, matingPoolPercent, numLegs, gravity, friction;
-let evolveBodyW, evolveBodyH, evolveLegL, evolveLegW, evolveLegAnchorX, evolveLegAnchorY, locomotionGoal; // Updated with new toggles
+let evolveBodyW, evolveBodyH, evolveLegL, evolveLegW, evolveLegAnchorX, evolveLegAnchorY, locomotionGoal;
 let population = [], historyFlag1 = [], historyFlag2 = [];
 let generation = 0, bestDistanceAllTime = 0;
 let previousBest1 = { generation: 0, distance: 0 }, previousBest2 = { generation: 0, distance: 0 };
-let runner, engine, render, ground;
-let generationTimer, uiTimer, isRunning = false, isStarting = false, isPaused = false;
+let runner = null, engine = null, render = null, ground = null; // Initialize as null to ensure proper re-creation
+let generationTimer, uiTimer = null, isRunning = false, isStarting = false, isPaused = false;
 let cameraTargetX = SPAWN_X, cameraX = SPAWN_X;
 let isPanning = false, lastPanX = 0;
 let evolutionChart, generationHistory = [];
 let importedDnaPool = null;
-let lastGenerationMatingPool = []; // Stores DNA from the last completed successful generation for export
+let lastGenerationMatingPool = [];
 
 const defaultSettings = {};
 function storeDefaultSettings() {
@@ -166,69 +175,78 @@ function storeDefaultSettings() {
 
 class Walker {
     constructor(dna, x, y) {
-        // console.log(`Walker constructor: Creating walker with DNA:`, dna);
+        // console.log(`[Walker.constructor] Creating walker at (${x}, ${y}) with DNA:`, dna);
         this.dna = dna;
         const group = -1; // Collide with nothing in the same group
         const bodyRenderStyle = { strokeStyle: '#333', lineWidth: 2 };
         const opt = { friction: 0.8, collisionFilter: { group }, render: bodyRenderStyle };
         this.composite = Composite.create({ label: 'Walker' });
 
-        // Torso creation with bounds checking
-        const torsoW = Math.max(10, Math.min(200, dna.genes.torsoSize.w)); // Ensure sensible size
-        const torsoH = Math.max(10, Math.min(200, dna.genes.torsoSize.h));
+        // Torso creation with robust validation and clamping
+        const torsoW = Math.max(10, Math.min(200, dna.genes.torsoSize.w || 40));
+        const torsoH = Math.max(10, Math.min(200, dna.genes.torsoSize.h || 60));
+        
         const torso = Bodies.rectangle(x, y, torsoW, torsoH, {...opt, render: { ...bodyRenderStyle, fillStyle: dna.genes.color }});
         this.torso = torso;
         this.startPosition = Vector.clone(torso.position);
         Composite.addBody(this.composite, torso);
-        // console.log(`Torso created: x=${torso.position.x}, y=${torso.position.y}, w=${torsoW}, h=${torsoH}`);
+        // console.log(`[Walker.constructor] Torso created: w=${torsoW}, h=${torsoH}`);
 
         dna.genes.legs.forEach((legDna, legIndex) => {
             let parentBody = this.torso;
-            // Use the evolved leg anchor point from DNA, with a fallback if somehow missing or invalid
-            const defaultAnchor = { x:0, y: dna.genes.torsoSize.h / 2 };
-            const rawAnchor = dna.genes.legAnchors[legIndex] || defaultAnchor;
+            // Get anchor point from DNA, or use a sane default if somehow missing
+            const rawAnchor = dna.genes.legAnchors[legIndex] || { x: 0, y: torsoH / 2 };
             
-            // Bounds check for anchor points to prevent extreme values
+            // Clamp anchor points relative to torso dimensions (with a small margin)
             const parentAttachPoint = { 
-                x: Math.max(-torsoW/2 + 5, Math.min(torsoW/2 - 5, rawAnchor.x)), // Stay within torso width
-                y: Math.max(-torsoH/2 + 5, Math.min(torsoH/2 - 5, rawAnchor.y))  // Stay within torso height
+                x: Math.max(-torsoW/2 + 5, Math.min(torsoW/2 - 5, rawAnchor.x)),
+                y: Math.max(-torsoH/2 + 5, Math.min(torsoH/2 - 5, rawAnchor.y)) 
             };
-            // console.log(`Leg ${legIndex} anchor:`, parentAttachPoint);
+            // console.log(`[Walker.constructor] Leg ${legIndex} anchor:`, parentAttachPoint);
 
             legDna.forEach((segmentDna, segIndex) => {
-                const legWidth = Math.max(5, Math.min(30, segmentDna.width)); // Bounds check
-                const legLength = Math.max(10, Math.min(100, segmentDna.len)); // Bounds check
+                // Ensure leg segment sizes are valid and clamped
+                const legWidth = Math.max(5, Math.min(30, segmentDna.width || 10));
+                const legLength = Math.max(10, Math.min(100, segmentDna.len || 40));
 
-                // Position calculations use the parentAttachPoint relative to the parent body's center
-                // For the first segment, this is relative to the torso.
-                // For subsequent segments, it's relative to the previous segment's center.
-                const spawnX = parentBody.position.x + parentAttachPoint.x; 
-                const spawnY = parentBody.position.y + parentAttachPoint.y + legLength / 2; 
+                // Calculate segment spawn position relative to the parent body's current position and attachment point
+                // For the first segment, parentBody is the torso. For subsequent, it's the previous segment.
+                // Matter.js positions bodies by their center.
+                const currentParentPos = parentBody.position;
+                // We want to attach the top of the current segment to the attachment point on the parent.
+                // So, the segment's center will be at parentAttachPoint.y + legLength/2 from parent's center.
+                const spawnX = currentParentPos.x + parentAttachPoint.x; 
+                const spawnY = currentParentPos.y + parentAttachPoint.y + legLength / 2; 
 
                 const segmentBody = Bodies.rectangle(spawnX, spawnY, legWidth, legLength, {...opt, render: { ...bodyRenderStyle, fillStyle: '#888' }});
+                
                 const joint = Constraint.create({
-                    bodyA: parentBody, bodyB: segmentBody,
-                    pointA: parentAttachPoint, pointB: { x: 0, y: -legLength / 2 },
-                    stiffness: 0.9, length: 0, render: { visible: false }
+                    bodyA: parentBody, 
+                    bodyB: segmentBody,
+                    pointA: parentAttachPoint, // Point on parent relative to its center
+                    pointB: { x: 0, y: -legLength / 2 }, // Point on child (segment) relative to its center (its top)
+                    stiffness: 0.9, 
+                    length: 0, 
+                    render: { visible: false }
                 });
+
                 Composite.addBody(this.composite, segmentBody);
                 Composite.addConstraint(this.composite, joint);
                 
-                // For subsequent segments of the *same* leg, the attachment is relative to the *previous* segment's end
-                parentBody = segmentBody;
-                parentAttachPoint = { x: 0, y: legLength / 2 }; // This point is now relative to the segment's center
-                // console.log(`  Leg ${legIndex}, Segment ${segIndex} created.`);
+                parentBody = segmentBody; // The newly created segment becomes the parent for the next segment in this leg
+                parentAttachPoint = { x: 0, y: legLength / 2 }; // The attachment point is now the bottom center of the new parent segment
+                // console.log(`[Walker.constructor]   Leg ${legIndex}, Segment ${segIndex} created. Pos: (${spawnX.toFixed(0)}, ${spawnY.toFixed(0)})`);
             });
         });
         World.add(engine.world, this.composite);
-        // console.log(`Walker composite added to world. Total bodies in world: ${engine.world.bodies.length}`);
+        // console.log(`[Walker.constructor] Walker composite added to world. Current bodies in Matter.js world: ${engine.world.bodies.length}`);
     }
     update(simTime) {
         // Ensure there are actual legs/segments before trying to animate
         if (!this.dna.genes.legs || this.dna.genes.legs.length === 0) return;
 
         const allSegmentsDna = this.dna.genes.legs.flat();
-        // Skip torso (index 0)
+        // The first body in composite is torso, subsequent are leg segments
         const legSegmentBodies = this.composite.bodies.slice(1); 
         legSegmentBodies.forEach((segmentBody, index) => {
             const segmentDna = allSegmentsDna[index];
@@ -240,6 +258,7 @@ class Walker {
     render(style) { const v = style !== 'hidden'; Composite.allBodies(this.composite).forEach(p => p.render.visible = v); }
     destroy() { World.remove(engine.world, this.composite); }
 }
+
 class DNA {
     constructor(genes) {
         if (genes) {
@@ -247,59 +266,60 @@ class DNA {
         } else {
             this.genes = { legs: [], color: `hsl(${Math.random() * 360}, 70%, 70%)` };
             
-            // Torso Size (with min/max bounds)
-            const baseW = (locomotionGoal === 'quadrupedal') ? 60 : 20;
-            const baseH = (locomotionGoal === 'quadrupedal') ? 20 : 40;
-            const randW = evolveBodyW ? Math.random() * 30 : 0;
-            const randH = evolveBodyH ? Math.random() * 30 : 0;
+            // Torso Size with sensible defaults and clamping
+            const baseW = (locomotionGoal === 'quadrupedal') ? 60 : 40; // Default torso widths
+            const baseH = (locomotionGoal === 'quadrupedal') ? 40 : 60; // Default torso heights
+            const randW = evolveBodyW ? (Math.random() - 0.5) * 60 : 0; // Random +/- 30
+            const randH = evolveBodyH ? (Math.random() - 0.5) * 60 : 0; // Random +/- 30
+            
             this.genes.torsoSize = { 
-                w: Math.max(10, Math.min(200, baseW + randW)), // Ensure sensible size
-                h: Math.max(10, Math.min(200, baseH + randH))
+                w: Math.max(20, Math.min(150, baseW + randW)), 
+                h: Math.max(20, Math.min(150, baseH + randH))
             };
             
             this.genes.legAnchors = [];
+            const torsoHalfW = this.genes.torsoSize.w / 2;
+            const torsoHalfH = this.genes.torsoSize.h / 2;
+
             for (let i = 0; i < numLegs; i++) {
                 let baseAnchorX, baseAnchorY;
-                const torsoHalfW = this.genes.torsoSize.w / 2;
-                const torsoHalfH = this.genes.torsoSize.h / 2;
-
+                
                 // Determine base anchor point based on locomotion goal and number of legs
-                if (locomotionGoal === 'quadrupedal') {
-                    baseAnchorY = torsoHalfH - 5; // Slightly up from the very bottom for stability
-                    if (numLegs === 1) {
-                        baseAnchorX = 0;
-                    } else { // 2 legs for quadrupedal
-                        baseAnchorX = (i === 0) ? -torsoHalfW * 0.75 : torsoHalfW * 0.75; // More towards the ends
-                    }
-                } else { // Bipedal or None
-                    baseAnchorY = torsoHalfH; // Exactly at the bottom for bipedal
-                    if (numLegs === 1) {
-                        baseAnchorX = 0;
-                    } else { // 2 legs for bipedal
-                        baseAnchorX = (i === 0) ? -torsoHalfW * 0.5 : torsoHalfW * 0.5; // Balanced left/right
-                    }
+                // These are robust defaults before randomness/mutation
+                if (numLegs === 1) {
+                    baseAnchorX = 0;
+                } else { // 2 legs
+                    baseAnchorX = (i === 0) ? -torsoHalfW * 0.5 : torsoHalfW * 0.5; 
                 }
+                
+                if (locomotionGoal === 'quadrupedal') {
+                    baseAnchorY = torsoHalfH * 0.8; // Towards bottom, but not fully for quadrupedal
+                } else { // Bipedal or None
+                    baseAnchorY = torsoHalfH; // At the very bottom for bipedal
+                }
+                
+                // Add random offset if evolution is enabled for anchors, clamp within reasonable range
+                const initialAnchorRangeX = 30; // Max initial random offset for X
+                const initialAnchorRangeY = 20; // Max initial random offset for Y
 
-                // Add random offset if evolution is enabled for anchors, clamp to reasonable range
-                const initialAnchorRangeX = 40; // Max random offset for X
-                const initialAnchorRangeY = 30; // Max random offset for Y
+                let anchorX = evolveLegAnchorX ? baseAnchorX + (Math.random() - 0.5) * initialAnchorRangeX : baseAnchorX;
+                let anchorY = evolveLegAnchorY ? baseAnchorY + (Math.random() - 0.5) * initialAnchorRangeY : baseAnchorY;
 
-                const anchorX = evolveLegAnchorX ? baseAnchorX + (Math.random() - 0.5) * initialAnchorRangeX : baseAnchorX;
-                const anchorY = evolveLegAnchorY ? baseAnchorY + (Math.random() - 0.5) * initialAnchorRangeY : baseAnchorY;
+                // Clamp anchor points to ensure they are always within the torso's bounds (with a small margin)
+                anchorX = Math.max(-torsoHalfW + 5, Math.min(torsoHalfW - 5, anchorX));
+                anchorY = Math.max(-torsoHalfH + 5, Math.min(torsoHalfH - 5, anchorY));
 
-                // Clamp anchor points to within the torso's approximate boundaries (with a small margin)
-                this.genes.legAnchors.push({ 
-                    x: Math.max(-torsoHalfW + 5, Math.min(torsoHalfW - 5, anchorX)),
-                    y: Math.max(-torsoHalfH + 5, Math.min(torsoHalfH - 5, anchorY))
-                });
+                this.genes.legAnchors.push({ x: anchorX, y: anchorY });
             }
 
             // Create leg segments
             for (let i = 0; i < numLegs; i++) {
                 const leg = [];
                 for (let j = 0; j < legSegments; j++) {
-                    const len = evolveLegL ? Math.max(10, Math.min(100, 20 + Math.random() * 40)) : 40;
-                    const width = evolveLegW ? Math.max(5, Math.min(30, 5 + Math.random() * 10)) : 10;
+                    // Leg segment dimensions with sensible defaults and clamping
+                    const len = evolveLegL ? Math.max(10, Math.min(80, 20 + (Math.random() - 0.5) * 40)) : 40; // Default 40, +/- 20
+                    const width = evolveLegW ? Math.max(5, Math.min(20, 5 + (Math.random() - 0.5) * 10)) : 10; // Default 10, +/- 5
+                    
                     leg.push({ 
                         len, 
                         width, 
@@ -310,7 +330,7 @@ class DNA {
                 }
                 this.genes.legs.push(leg);
             }
-            // console.log("New DNA genes:", this.genes);
+            // console.log("New DNA genes created:", this.genes);
         }
     }
     crossover(p) {
@@ -320,7 +340,7 @@ class DNA {
         
         // Crossover leg anchors: Iterating per leg, swap if random condition met
         for (let i = 0; i < numLegs; i++) {
-            if (p.genes.legAnchors[i] && Math.random() < 0.5) { // Ensure parent has the anchor
+            if (p.genes.legAnchors[i] && Math.random() < 0.5) { 
                 nG.legAnchors[i] = { ...p.genes.legAnchors[i] };
             }
         }
@@ -342,8 +362,8 @@ class DNA {
         const m = (v, d) => v + (Math.random() - 0.5) * d;
         
         // Torso mutation with bounds
-        if (evolveBodyW && Math.random() < r) this.genes.torsoSize.w = Math.max(10, Math.min(200, m(this.genes.torsoSize.w, 10)));
-        if (evolveBodyH && Math.random() < r) this.genes.torsoSize.h = Math.max(10, Math.min(200, m(this.genes.torsoSize.h, 10)));
+        if (evolveBodyW && Math.random() < r) this.genes.torsoSize.w = Math.max(20, Math.min(150, m(this.genes.torsoSize.w, 15)));
+        if (evolveBodyH && Math.random() < r) this.genes.torsoSize.h = Math.max(20, Math.min(150, m(this.genes.torsoSize.h, 15)));
         
         this.genes.legAnchors.forEach(anchor => {
             const torsoHalfW = this.genes.torsoSize.w / 2;
@@ -351,18 +371,18 @@ class DNA {
             
             // Mutate X anchor if enabled, clamp within torso bounds
             if (evolveLegAnchorX && Math.random() < r) {
-                anchor.x = Math.max(-torsoHalfW + 5, Math.min(torsoHalfW - 5, m(anchor.x, 15)));
+                anchor.x = Math.max(-torsoHalfW + 5, Math.min(torsoHalfW - 5, m(anchor.x, 10)));
             }
             // Mutate Y anchor if enabled, clamp within torso bounds
             if (evolveLegAnchorY && Math.random() < r) {
-                anchor.y = Math.max(-torsoHalfH + 5, Math.min(torsoHalfH - 5, m(anchor.y, 10)));
+                anchor.y = Math.max(-torsoHalfH + 5, Math.min(torsoHalfH - 5, m(anchor.y, 8)));
             }
         });
 
         this.genes.legs.forEach(leg => {
             leg.forEach(segment => {
-                if (evolveLegL && Math.random() < r) segment.len = Math.max(10, Math.min(100, m(segment.len, 10)));
-                if (evolveLegW && Math.random() < r) segment.width = Math.max(5, Math.min(30, m(segment.width, 5)));
+                if (evolveLegL && Math.random() < r) segment.len = Math.max(10, Math.min(80, m(segment.len, 10)));
+                if (evolveLegW && Math.random() < r) segment.width = Math.max(5, Math.min(20, m(segment.width, 5)));
                 if (Math.random() < r) segment.motorSpeed = m(segment.motorSpeed, 1);
                 if (Math.random() < r) segment.motorOffset = m(segment.motorOffset, Math.PI / 2);
                 if (Math.random() < r) segment.motorStrength = m(segment.motorStrength, 0.1);
@@ -373,30 +393,47 @@ class DNA {
 }
 
 function setup() {
-    console.log("setup() called. Initializing Matter.js engine and renderer...");
+    console.log("-> setup() called. Initializing Matter.js engine and renderer...");
+    
+    // Ensure existing engine, render, runner are stopped and nullified before creating new ones
+    if (engine) stopSimulation(); 
+
     engine = Engine.create({ positionIterations: 4, velocityIterations: 2 }); 
     engine.world.gravity.y = gravity;
-    render = Render.create({canvas:canvas,engine:engine,options:{width:SIM_WIDTH,height:SIM_HEIGHT,wireframes:false,background:'transparent'}});
     
-    // Check if gravity is a valid number
+    // Validate gravity
     if (isNaN(engine.world.gravity.y) || !isFinite(engine.world.gravity.y)) {
         console.error("Invalid gravity value:", gravity, ". Setting to default 1.0.");
         engine.world.gravity.y = 1.0;
     }
 
+    render = Render.create({
+        canvas: canvas,
+        engine: engine,
+        options: {
+            width: SIM_WIDTH,
+            height: SIM_HEIGHT,
+            wireframes: false, // Ensure wireframes are off for colored bodies
+            background: 'transparent'
+        }
+    });
+    Render.run(render); // Start the renderer AFTER creating it
+    
+    runner = Runner.create(); // Create runner AFTER engine
+    Runner.run(runner, engine); // Start the runner AFTER creating it and engine
+
     ground = Bodies.rectangle(SIM_WIDTH*2, SIM_HEIGHT-25, SIM_WIDTH*10, 50, {isStatic:true, friction: friction, render:{fillStyle:'#333'}});
     World.add(engine.world, [ground, ...createFlag(SPAWN_X, '#00dd00')]);
-    console.log("Ground and initial flag added to world.");
+    console.log(`-> Ground and initial flag added to world. Current bodies in Matter.js world: ${engine.world.bodies.length}`);
 
     Events.on(engine, 'beforeUpdate', () => { 
         if (isRunning && !isPaused) {
             population.forEach(walker => walker.update(engine.timing.timestamp / 1000)); 
         }
     });
-    Runner.run(runner, engine); 
-    Render.run(render);
-    console.log("Matter.js Runner and Renderer started.");
-    nextGeneration();
+    
+    console.log("-> Matter.js Engine, Runner, and Renderer are running.");
+    nextGeneration(); // Start the first generation
 }
 
 function uiLoop() {
@@ -407,11 +444,14 @@ function uiLoop() {
         info_time.textContent = Math.max(0, timeLeft).toFixed(1);
         if (timeLeft <= 0) nextGeneration();
     }
-    if (isRunning) uiTimer = requestAnimationFrame(uiLoop);
+    uiTimer = requestAnimationFrame(uiLoop); // Always request next frame if not starting/stopped
 }
 
 function updateDisplayAndCamera() {
-    if (population.length === 0) return; // Prevent errors if population is empty
+    if (!render || !render.engine || !render.engine.world || population.length === 0) {
+        // console.warn("updateDisplayAndCamera: Renderer or population not ready.");
+        return; 
+    }
     population.sort((a,b) => b.torso.position.x - a.torso.position.x);
     const topPerformers = new Set(population.slice(0, topNDisplay));
     population.forEach(w => w.render(topPerformers.has(w)?'normal':'hidden'));
@@ -422,7 +462,7 @@ function updateDisplayAndCamera() {
 
 function nextGeneration() {
     console.log(`--- Starting Generation ${generation + 1} ---`);
-    isRunning = false;
+    isRunning = false; // Pause simulation logic while calculating and spawning
     if(uiTimer) cancelAnimationFrame(uiTimer);
 
     // 1. Calculate fitness for the *current (just finished)* population
@@ -435,7 +475,6 @@ function nextGeneration() {
             if (Math.abs(torsoAngle) > uprightAngleThreshold) distance *= 0.1;
         } else if (locomotionGoal === 'quadrupedal') {
             const horizontalAngleThreshold = Math.PI / 4;
-            // If the walker is too upright (not horizontal enough) for quadrupedal, penalize
             if (Math.abs(Math.abs(torsoAngle) - Math.PI/2) > horizontalAngleThreshold) distance *= 0.1;
         }
         w.fitness = distance;
@@ -448,16 +487,15 @@ function nextGeneration() {
     const bestDist = bestWalker ? bestWalker.fitness : 0;
     
     // Store the mating pool from THIS completed generation for export and next breeding
-    lastGenerationMatingPool = []; // Clear it first
+    lastGenerationMatingPool = [];
     const eliteCountForExport = Math.floor(population.length * (matingPoolPercent / 100));
-    if(population.length > 0 && population[0].fitness > 0) { // Only store if there was actual forward movement
+    if(population.length > 0 && population[0].fitness > 0) { 
         const eliteForExport = population.slice(0, Math.max(1, eliteCountForExport));
         eliteForExport.forEach(w => { 
             for(let i=0; i<100; i++) lastGenerationMatingPool.push(w.dna); 
         });
     }
-    console.log(`Generation ${generation} best distance: ${bestDist.toFixed(2)}m. Mating pool size: ${lastGenerationMatingPool.length}`);
-
+    console.log(`Generation ${generation} fitness calculated. Best dist: ${bestDist.toFixed(2)}m. Mating pool size for export: ${lastGenerationMatingPool.length}`);
 
     if (generation > 0) generationHistory.push({ generation: generation, distance: bestWalker ? Math.max(0, bestWalker.torso.position.x - bestWalker.startPosition.x) : 0 });
     if (bestDist > bestDistanceAllTime) bestDistanceAllTime = bestDist;
@@ -466,45 +504,40 @@ function nextGeneration() {
     generation++; info_gen.textContent = generation; info_dist.textContent = bestDistanceAllTime.toFixed(2);
     updateHistoryUIAndFlags(); updateChart();
     
-    // Determine the mating pool for the *NEXT* generation.
     let matingPoolForBreeding;
-    if (generation === 1 && importedDnaPool) { // For the very first generation (Gen 1)
+    if (generation === 1 && importedDnaPool) {
         matingPoolForBreeding = importedDnaPool;
-        importedDnaPool = null; // Use imported DNA only once
+        importedDnaPool = null;
         importStatus.textContent = '';
-        console.log("Using imported DNA for breeding pool.");
-    } else { // For subsequent generations, use the just-calculated `lastGenerationMatingPool`
+        console.log("Using imported DNA for breeding pool (Gen 1).");
+    } else {
         matingPoolForBreeding = lastGenerationMatingPool;
         console.log("Using previous generation's mating pool for breeding.");
     }
 
-    population.forEach(w => w.destroy()); population = []; // Clear old population
+    // Destroy old walkers from the Matter.js world
+    population.forEach(w => w.destroy()); 
+    population = []; // Clear population array
+    
     const spawnPromises = [];
     for (let i = 0; i < popSize; i++) {
-        const spawnPromise = new Promise(resolve => setTimeout(() => {
-            if (isStarting) return resolve(); // If simulation reset/stopped mid-spawn
-            try {
-                // Pick DNA from `matingPoolForBreeding` or create new if pool is empty
-                const pA = matingPoolForBreeding.length > 0 ? matingPoolForBreeding[Math.floor(Math.random()*matingPoolForBreeding.length)] : new DNA();
-                const pB = matingPoolForBreeding.length > 0 ? matingPoolForBreeding[Math.floor(Math.random()*matingPoolForBreeding.length)] : new DNA();
-                const childDNA = pA.crossover(pB); childDNA.mutate(mutationRate);
-                
-                // Spawn height adjustment to ensure they are above ground
-                const spawnHeight = SIM_HEIGHT - 100; // General safe spawn height
-                // If bipedal, potentially higher for a "drop"
-                if (locomotionGoal === 'bipedal') {
-                    spawnHeight = SIM_HEIGHT - 250; 
+        spawnPromises.push(new Promise(resolve => {
+            setTimeout(() => {
+                if (isStarting) return resolve(); // Exit if simulation is being reset/stopped
+                try {
+                    const pA = matingPoolForBreeding.length > 0 ? matingPoolForBreeding[Math.floor(Math.random()*matingPoolForBreeding.length)] : new DNA();
+                    const pB = matingPoolForBreeding.length > 0 ? matingPoolForBreeding[Math.floor(Math.random()*matingPoolForBreeding.length)] : new DNA();
+                    const childDNA = pA.crossover(pB); childDNA.mutate(mutationRate);
+                    
+                    const spawnHeight = locomotionGoal === 'bipedal' ? SIM_HEIGHT - 250 : SIM_HEIGHT - 150;
+                    population.push(new Walker(childDNA, SPAWN_X, spawnHeight));
+                    // console.log(`[nextGeneration] Spawned Walker ${i + 1}/${popSize}`);
+                } catch (e) {
+                    console.error(`[nextGeneration] Error spawning walker ${i + 1}:`, e);
                 }
-
-                population.push(new Walker(childDNA, SPAWN_X, spawnHeight));
-                // console.log(`Spawned Walker ${i + 1}/${popSize}`);
-            } catch (e) {
-                console.error(`Error spawning walker ${i + 1}:`, e);
-                // Continue trying to spawn others, but log the error
-            }
-            resolve();
-        }, i * (500 / popSize) )); // Stagger spawning slightly for large populations
-        spawnPromises.push(spawnPromise); 
+                resolve();
+            }, i * (500 / popSize) ); // Stagger spawn to prevent browser freeze on many bodies
+        }));
     }
     
     Promise.all(spawnPromises).then(() => { 
@@ -513,25 +546,55 @@ function nextGeneration() {
             isPaused = false; 
             generationTimer = performance.now(); 
             uiTimer = requestAnimationFrame(uiLoop); 
-            console.log(`Generation ${generation} spawned. Simulation running.`);
+            console.log(`[nextGeneration] All ${popSize} walkers spawned. Simulation running.`);
         } else {
-            console.log("Spawn sequence interrupted due to simulation restart.");
+            console.log("[nextGeneration] Spawn sequence interrupted by start/reset. Not starting simulation loop.");
         }
     }).catch(e => {
-        console.error("Error during walker spawning promise resolution:", e);
+        console.error("[nextGeneration] Error during walker spawning promise resolution:", e);
     });
 }
 
 function createFlag(x, color) { const y = SIM_HEIGHT-50, opt={isStatic:true,isSensor:true,render:{fillStyle:color}}; return [Bodies.rectangle(x, y-20, 3, 40, opt), Bodies.rectangle(x+10, y-40, 20, 10, opt)]; }
 function updateHistoryUIAndFlags() {
-    if(historyFlag1.length>0)World.remove(engine.world,historyFlag1); if(historyFlag2.length>0)World.remove(engine.world,historyFlag2);
-    historyFlag1=[],historyFlag2=[];
-    if(previousBest1.generation>0){ history1DistEl.textContent=`${previousBest1.distance.toFixed(2)}m`;history1GenEl.textContent=previousBest1.generation; if(previousBest1.distance>0){historyFlag1=createFlag(SPAWN_X+previousBest1.distance,'#ffd700');World.add(engine.world,historyFlag1);}}else{history1DistEl.textContent="N/A";history1GenEl.textContent="0";}
-    if(previousBest2.generation>0){ history2DistEl.textContent=`${previousBest2.distance.toFixed(2)}m`;history2GenEl.textContent=previousBest2.generation; if(previousBest2.distance>0){historyFlag2=createFlag(SPAWN_X+previousBest2.distance,'#00aaff');World.add(engine.world,historyFlag2);}}else{history2DistEl.textContent="N/A";history2GenEl.textContent="0";}
+    // Check if engine exists before trying to remove/add bodies
+    if (!engine || !engine.world) return;
+
+    if(historyFlag1.length>0)World.remove(engine.world,historyFlag1); 
+    if(historyFlag2.length>0)World.remove(engine.world,historyFlag2);
+    
+    historyFlag1=[],historyFlag2=[]; // Clear array references
+    
+    if(previousBest1.generation>0){ 
+        history1DistEl.textContent=`${previousBest1.distance.toFixed(2)}m`;
+        history1GenEl.textContent=previousBest1.generation; 
+        if(previousBest1.distance>0){
+            historyFlag1=createFlag(SPAWN_X+previousBest1.distance,'#ffd700');
+            World.add(engine.world,historyFlag1);
+        }
+    }else{
+        history1DistEl.textContent="N/A";
+        history1GenEl.textContent="0";
+    }
+
+    if(previousBest2.generation>0){ 
+        history2DistEl.textContent=`${previousBest2.distance.toFixed(2)}m`;
+        history2GenEl.textContent=previousBest2.generation; 
+        if(previousBest2.distance>0){
+            historyFlag2=createFlag(SPAWN_X+previousBest2.distance,'#00aaff');
+            World.add(engine.world,historyFlag2);
+        }
+    }else{
+        history2DistEl.textContent="N/A";
+        history2GenEl.textContent="0";
+    }
 }
 
 function setupChart() {
     const ctx = document.getElementById('evolutionChart').getContext('2d');
+    if (evolutionChart) { // Destroy existing chart if it exists to prevent conflicts
+        evolutionChart.destroy();
+    }
     evolutionChart = new Chart(ctx, {
         type: 'line', data: { labels: [], datasets: [{ label: 'Best Distance per Generation', data: [], borderColor: '#00aaff', backgroundColor: 'rgba(0, 170, 255, 0.2)', borderWidth: 2, fill: true, tension: 0.1 }] },
         options: { scales: { x: { title: { display: true, text: 'Generation', color: '#ccc'}, grid: { color: 'rgba(204, 204, 204, 0.2)' }, ticks: { color: '#ccc'} }, y: { title: { display: true, text: 'Distance (m)', color: '#ccc'}, grid: { color: 'rgba(204, 204, 204, 0.2)' }, ticks: { color: '#ccc'} } }, plugins: { legend: { labels: { color: '#ccc' } } }, responsive: true, }
@@ -545,15 +608,16 @@ function updateChart() {
 }
 
 function readSettings() { 
-    popSize = parseInt(popSizeInput.value); 
-    mutationRate = parseFloat(mutationRateInput.value)/100;
-    topNDisplay = parseInt(topNDisplayInput.value); 
-    genTime = parseInt(genTimeInput.value);
-    legSegments = Math.max(1,Math.min(3,parseInt(legJointsInput.value))); legJointsInput.value = legSegments; // Clamp and update input
-    matingPoolPercent = parseInt(matingPoolInput.value); 
-    numLegs = parseInt(numLegsInput.value);
-    gravity = parseFloat(gravityInput.value); 
-    friction = parseFloat(frictionInput.value);
+    popSize = parseInt(popSizeInput.value) || 100; 
+    mutationRate = parseFloat(mutationRateInput.value)/100 || 0.05;
+    topNDisplay = parseInt(topNDisplayInput.value) || 10;
+    genTime = parseInt(genTimeInput.value) || 15;
+    legSegments = Math.max(1,Math.min(3,parseInt(legJointsInput.value) || 2)); 
+    legJointsInput.value = legSegments; // Update input field to clamped value
+    matingPoolPercent = parseInt(matingPoolInput.value) || 50;
+    numLegs = parseInt(numLegsInput.value) || 2;
+    gravity = parseFloat(gravityInput.value) || 1.0;
+    friction = parseFloat(frictionInput.value) || 0.8;
     evolveBodyW = evolveBodyWidthToggle.checked; 
     evolveBodyH = evolveBodyHeightToggle.checked;
     evolveLegL = evolveLegLengthToggle.checked; 
@@ -568,72 +632,107 @@ function readSettings() {
 resetButton.addEventListener('click', () => {
     Object.entries(defaultSettings).forEach(([key, value]) => {
         if (key === 'locomotion') {
-            document.querySelector(`input[name="locomotion"][value="${value}"]`).checked = true;
+            const radio = document.querySelector(`input[name="locomotion"][value="${value}"]`);
+            if (radio) radio.checked = true;
         } else {
             const input = document.getElementById(key);
-            if (input.type === 'checkbox') input.checked = value;
-            else input.value = value;
+            if (input) {
+                if (input.type === 'checkbox') input.checked = value;
+                else input.value = value;
+            }
         }
     });
-    readSettings(); // Re-read settings after reset
+    readSettings(); // Re-read settings after reset to apply them
     console.log("Settings reset to defaults.");
 });
+
 pauseButton.addEventListener('click', () => {
     if (!isRunning) return;
     isPaused = !isPaused;
     pauseButton.textContent = isPaused ? 'Resume' : 'Pause';
     console.log(`Simulation ${isPaused ? 'paused' : 'resumed'}.`);
     if (!isPaused) {
-        generationTimer += performance.now() - (window.pauseStartTime || 0);
-        uiLoop();
+        generationTimer += performance.now() - (window.pauseStartTime || 0); // Adjust timer for pause duration
+        uiLoop(); // Resume UI and simulation loop
     } else {
-        window.pauseStartTime = performance.now();
+        window.pauseStartTime = performance.now(); // Record pause start time
     }
 });
+
 function stopSimulation() {
     console.log("Stopping simulation components.");
-    isRunning = false; isPaused = false;
-    if (uiTimer) cancelAnimationFrame(uiTimer);
-    if (runner) Runner.stop(runner);
-    if (render) Render.stop(render);
+    isRunning = false; 
+    isPaused = false;
+    if (uiTimer) {
+        cancelAnimationFrame(uiTimer);
+        uiTimer = null;
+    }
+    
+    if (runner) { 
+        Runner.stop(runner); 
+        runner = null; 
+    }
+    if (render) { 
+        Render.stop(render); 
+        render.canvas.remove(); // Remove old canvas to prevent memory leaks/multiple canvases
+        render = null; 
+        // Re-add a new canvas element if it was removed. This is often safer than just nulling render.
+        // For simplicity, we assume canvas is always there by HTML and just clear its context.
+        // If your setup removes/re-adds canvas, adjust this.
+        canvas.getContext('2d').clearRect(0, 0, canvas.width, canvas.height);
+    }
     if (engine) { 
         World.clear(engine.world); 
         Engine.clear(engine); 
-        // Reset engine to default state for re-use, though recreating might be safer
         engine = null; 
-        render = null;
-        runner = null;
     }
+    // Explicitly clear canvas content visually
+    const ctx = canvas.getContext('2d');
+    if (ctx) ctx.clearRect(0, 0, canvas.width, canvas.height);
+    
+    console.log("Simulation components stopped and nullified.");
 }
+
 startButton.addEventListener('click', () => {
-    if (isStarting) return;
-    console.log("Start Evolution button clicked.");
+    if (isStarting) return; // Prevent multiple clicks during startup
+    console.log("Start Evolution button clicked. Initiating sequence.");
     isStarting = true;
-    startButton.textContent = 'Starting...'; startButton.disabled = true;
-    pauseButton.disabled = true; pauseButton.textContent = 'Pause';
+    startButton.textContent = 'Starting...'; 
+    startButton.disabled = true;
+    pauseButton.disabled = true; 
+    pauseButton.textContent = 'Pause';
     exportButton.disabled = true;
     
-    stopSimulation(); // Ensure previous simulation is cleanly stopped
+    stopSimulation(); // Ensure previous simulation is cleanly stopped and components nulled
     
-    // Give a small delay to ensure cleanup before new setup
+    // Small delay to ensure browser has time to cleanup/render before new setup begins
     setTimeout(() => {
-        readSettings(); // Read current settings before starting new sim
-        generation = 0; bestDistanceAllTime = 0; population = [];
-        previousBest1 = { generation: 0, distance: 0 }; previousBest2 = { generation: 0, distance: 0 };
-        generationHistory = []; cameraX = SPAWN_X; cameraTargetX = SPAWN_X;
-        lastGenerationMatingPool = []; // Reset the exportable DNA pool on new start
+        readSettings(); // Read current settings from UI fields
+        // Reset global simulation state variables for a new run
+        generation = 0; 
+        bestDistanceAllTime = 0; 
+        population = [];
+        previousBest1 = { generation: 0, distance: 0 }; 
+        previousBest2 = { generation: 0, distance: 0 };
+        generationHistory = []; 
+        cameraX = SPAWN_X; 
+        cameraTargetX = SPAWN_X;
+        lastGenerationMatingPool = []; 
         
-        updateHistoryUIAndFlags();
-        if (evolutionChart) { evolutionChart.data.labels = []; evolutionChart.data.datasets[0].data = []; evolutionChart.update(); }
+        updateHistoryUIAndFlags(); // Clear history flags
+        setupChart(); // Re-initialize chart
         
-        setup(); // Re-initialize Matter.js and start first generation
+        setup(); // Calls Matter.js setup and starts first generation
         
-        isStarting = false;
-        startButton.textContent = 'Restart Evolution'; startButton.disabled = false;
-        pauseButton.disabled = false; exportButton.disabled = false;
+        isStarting = false; // Allow button to be clicked again
+        startButton.textContent = 'Restart Evolution'; 
+        startButton.disabled = false;
+        pauseButton.disabled = false; 
+        exportButton.disabled = false;
         console.log("Simulation setup complete and running.");
     }, 100);
 });
+
 exportButton.addEventListener('click', () => {
     if (!lastGenerationMatingPool || lastGenerationMatingPool.length === 0) {
         alert("No successful walkers (i.e., none moved forward) to export yet. Let at least one generation complete and achieve some distance.");
@@ -651,6 +750,7 @@ exportButton.addEventListener('click', () => {
     URL.revokeObjectURL(url);
     console.log(`Exported DNA from generation ${generation - 1}.`);
 });
+
 importDnaFile.addEventListener('change', (event) => {
     const file = event.target.files[0];
     if (!file) return;
@@ -673,15 +773,18 @@ importDnaFile.addEventListener('change', (event) => {
         }
     };
     reader.readAsText(file);
-    importDnaFile.value = ''; 
+    importDnaFile.value = ''; // Reset file input to allow re-importing the same file
 });
 
 // Initial Setup when page loads
 storeDefaultSettings();
-readSettings();
+readSettings(); // Read initial settings for setup()
 setupChart();
-info_gen.textContent="0";info_dist.textContent="0.00";info_time.textContent=genTimeInput.value;
+info_gen.textContent="0";
+info_dist.textContent="0.00";
+info_time.textContent=genTimeInput.value; // Show initial generation time
 console.log("Initial page load: Default settings stored, UI updated.");
+
 </script>
 </body>
 </html>
